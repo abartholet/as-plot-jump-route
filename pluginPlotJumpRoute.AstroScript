@@ -1,0 +1,707 @@
+#plugin Plot Jump Route
+#author Alan Bartholet
+#desc Plots the shortest jump route between two systems.
+'Version 1.4
+
+'No undeclared variables
+Option Explicit 
+
+'Declare global variables
+Dim keyHit      'as Int
+
+'Declare the sector
+Dim sector      'as Sector
+
+'Load the sector
+sector = GetCurrentSector
+
+Main()
+
+Sub Main()
+    MainWindow()
+End Sub
+
+Sub FindRoute(origin, destination, rType, rName, rColour, rStyle, rWidth, jLength)
+    'Declare the needed arrays
+    ReDim openList(sector.SystemCount)          'as Array
+    Dim search                                                          'as Array
+
+    'Declare the needed dictionaries
+    Dim systemList                              'as Dictionary
+    Dim whichList                                   'as Dictionary
+    Dim parent                                      'as Dictionary
+    Dim fCost                                           'as Dictionary
+    Dim gCost                                           'as Dictionary
+    Dim hCost                                           'as Dictionary
+
+    'Declare other variables
+    Dim parentID, nodeID                    'as String
+    Dim closestID                                   'as String
+    Dim numberOfOpenListItems           'as Int
+    Dim newOpenListItemID                   'as Int
+    Dim i, m, u , v, x, w, j, b     'as Int
+    Dim temp, tempgCost                     'as Int
+    Dim onOpenList, onClosedList    'as Int
+    Dim startObj, targetObj             'as Body
+    Dim nodeObj, parentObj              'as Body
+    Dim tempObj                                     'as Body
+    Dim path                                            'as Bool
+    Dim route                                           'as Route
+    Dim wp                                              'as Waypoint
+    Dim offSet
+
+    'Set default values
+    Set systemList  = CreateObject("Scripting.Dictionary")
+    Set whichList       = CreateObject("Scripting.Dictionary")
+    Set parent          = CreateObject("Scripting.Dictionary")
+    Set fCost               = CreateObject("Scripting.Dictionary")
+    Set gCost               = CreateObject("Scripting.Dictionary")
+    Set hCost               = CreateObject("Scripting.Dictionary")
+    closestID = ""
+    numberOfOpenListItems   = 1
+    onOpenList = 1
+    onClosedList = 2
+
+    'Is the start the same as the target?
+    If origin = destination Then
+        MsgBox "No matter where you go, there you are.",64
+        Exit Sub
+    End If
+
+    'Validate the starting sector
+    startObj = sector.FindRootBodyByID(origin)
+
+    'Validate the target sector
+    targetObj = sector.FindRootBodyByID(destination)
+
+    'Display the messages
+    RefreshScene
+    sector.RenderMessageBig = "Searching for a route from " & startObj.Name & " to " & targetObj.Name
+    sector.RenderMessageSmall = "Press 'Esc' to Exit"
+    RefreshScene
+
+    'Add the starting system to the open list
+    openList(1) = startObj.IDString
+
+    Do
+        'Check for Escape Key
+        If keyHit <> 27 Then
+            keyHit = GetKey()
+        End If
+
+        If keyHit = 27 Then
+            'Select the start and target body
+            tempObj = sector.SelectBodies(Empty, Empty, 0)
+            sector.SelectBody(startObj)
+            sector.SelectBody(targetObj)
+            Exit Sub
+        End If
+
+        If numberOfOpenListItems > 0 Then
+
+            'Pop the first item off the open list
+            parentID = openList(1)
+            If whichList.Exists(parentID) Then
+                whichList.Remove(parentID)
+            End If
+            whichList.Add parentID, onClosedList
+            parentObj = sector.FindRootBodyByID(parentID)
+
+            'Open List = Binary Heap: Delete this item from the open list, which
+            'is maintained as a binary heap.
+            numberOfOpenListItems = numberOfOpenListItems - 1
+
+            'Delete the top item in binary heap and reorder the heap, 
+            'with the lowest F cost item rising to the top.
+            openList(1) = openList(numberOfOpenListItems+1)
+            v = 1
+            
+            'Repeat the following until the new item in slot #1 sinks to its proper spot in the heap.
+            Do
+                u = v
+                
+                If 2 * u + 1 <= numberOfOpenListItems Then 'if both children exist
+                    'Check if the F cost of the parent is greater than each child.
+                    'Select the lowest of the two children.
+                    If fCost.Item(openList(u)) >= fCost.Item(openList(2 * u)) Then
+                        v = 2 * u
+                    End If
+
+                    If fCost.Item(openList(v)) >= fCost.Item(openList(2 * u + 1)) Then
+                        v = 2 * u + 1
+                    End If
+
+                Else
+                    
+                    If 2 * u <= numberOfOpenListItems Then  'if only child #1 exists
+                        'Check if the F cost of the parent is greater than child #1
+                        If fCost.Item(openList(u)) >= fCost.Item(openList(2 * u)) Then
+                            v = 2 * u
+                        End If
+                    End If
+                End If
+
+                If u <> v Then  'if parent's F is > one of its children, swap them
+                    temp = openList(u)
+                    openList(u) = openList(v)
+                    openList(v) = temp          
+                Else
+                    Exit Do
+                End If
+
+            Loop While (GetKey() <> 27)
+
+            'Get all the systems within the max jump range of the parent node
+
+            'This is a bit of a kludge to make sure we only select the parent body
+            tempObj = sector.SelectBodies(Empty, Empty, 0)
+
+            'Select the parent body
+            sector.SelectBody(parentObj)
+
+            'Search for all the systems within jumping distance
+            If AppVersionMajor() < 3 Then
+                search = CreateSearcher()
+                search.WithinDistance = CDbl(jLength)
+                search.InChildren = 0
+                search.InVisibleOnly = 1
+                search.AddFieldSearch "jumpPoint", "1"
+                sector.Search(search)
+                offSet = -1
+            Else
+                search = CreateAstroSearcher(sector)
+                search.Search "Visible, Root only,  field jumpPoint = ""1"", Within " & CStr(jLength)
+                offSet = 0
+            End If
+
+            'Loop through all the systems found
+            For i = 1 To search.GetResultCount()
+                'Check for Escape Key
+                If keyHit <> 27 Then
+                    keyHit = GetKey()
+                End If
+
+                If keyHit = 27 Then
+                    'Select the start and target body
+                    tempObj = sector.SelectBodies(Empty, Empty, 0)
+                    sector.SelectBody(startObj)
+                    sector.SelectBody(targetObj)
+                    If AppVersionMajor() >= 3 Then
+                        FreeObject(search)
+                    End If
+                    Exit Sub
+                End If
+
+                'Get the object and ID for the node
+                nodeObj = search.GetResult(i + offSet)
+                nodeID = nodeObj.IDString
+
+                'If the node is not already on the closed list (items on the closed
+                'list have already been considered and can now be ignored).         
+                If whichList.Item(nodeID) <> onClosedList Then
+            
+                    'If not already on the open list, add it to the open list.
+                    If whichList.Item(nodeID) <> onOpenList Then
+
+                        'Create a new open list item in the binary heap.
+                        m = numberOfOpenListItems + 1
+                        openList(m) = nodeID
+
+                        'Get the gCost
+                        gCost.Add nodeID, gCost.Item(parentID) + 1
+
+                        'Get the hCost
+                        'hCost.Add nodeID, abs(nodeObj.X - targetObj.X) + abs(nodeObj.Y - targetObj.Y) + abs(nodeObj.Z - targetObj.Z)
+                        hCost.Add nodeID, Sqr((nodeObj.X - targetObj.X)^2 + (nodeObj.Y - targetObj.Y)^2 + (nodeObj.Z - targetObj.Z)^2)
+
+                        'get the fCost
+                        fCost.Add nodeID, gCost.Item(nodeID) + hCost.Item(nodeID)
+
+                        'set the parent
+                        parent.Add nodeID, parentID
+
+                        'set the closest system to the target
+                        If hCost.Item(closestID) = "" Then
+                            closestID = nodeID
+                        End If
+                        If hCost.Item(nodeID) < hCost.Item(closestID) Then
+                            closestID = nodeID
+                        End If
+
+                        'Move the new open list item to the proper place in the binary heap.
+                        'Starting at the bottom, successively compare to parent items,
+                        'swapping as needed until the item finds its place in the heap
+                        'or bubbles all the way to the top (if it has the lowest F cost).
+                        Do While (m <> 1) 'While item hasn't bubbled to the top (m=1)
+                            'Check if child's F cost is < parent's F cost. If so, swap them.    
+                            If fCost.Item(openList(m)) <= fCost.Item(openList(m/2)) Then
+                                temp = openList(m/2)
+                                openList(m/2) = openList(m)
+                                openList(m) = temp
+                                m = m/2
+                            Else
+                                Exit Do
+                            End If
+                        Loop
+
+                        numberOfOpenListItems = numberOfOpenListItems+1 'add one to the number of items in the heap
+
+                        'Change whichList to show that the new item is on the open list.
+                        whichList.Remove(nodeID)
+                        whichList.Add nodeID, onOpenList
+
+                    'If the system is already on the open list, check to see if this 
+                    'path to that system from the starting location is a better one. 
+                    'If so, change the parent of the cell and its G and F costs.    
+                    Else
+                        'Make sure node is within jumping distance of the parent
+                        If Sqr((nodeObj.X - parentObj.X)^2 + (nodeObj.Y - parentObj.Y)^2 + (nodeObj.Z - parentObj.Z)^2) <= CDbl(jLength) Then
+                            tempgCost = gCost.Item(parentID) + 1
+
+                            'If this path is shorter (G cost is lower) then change
+                            'the parent cell, G cost and F cost.        
+                            If tempgCost < gCost.Item(nodeID) Then 'if G cost is less,
+                                
+                                parent.Remove(nodeID)
+                                parent.Add nodeID, parentID 'change the nodes parent
+                                gCost.Remove(nodeID)
+                                gCost.Add nodeID, tempgCost ' change the gCost
+
+                                'Because changing the G cost also changes the F cost, if
+                                'the item is on the open list we need to change the item's
+                                'recorded F cost and its position on the open list to make
+                                'sure that we maintain a properly ordered open list.
+                                For x  = 1 To numberOfOpenListItems
+                                    If openList(x) = nodeID Then    'item found
+                                        fCost.Remove(nodeID)
+                                        fCost.Add nodeID, gCost.Item(nodeID) + hCost.Item(nodeID)   'change the fCost
+
+                                        'See if changing the F score bubbles the item up from it's current location in the heap
+                                        m = x
+                                        Do While (m <> 1) 'While item hasn't bubbled to the top (m=1)   
+                                            'Check if child is < parent. If so, swap them.  
+
+                                            If fCost.Item(openList(m)) < fCost.Item(openList(m/2))  Then
+                                                temp = openList(m/2)
+                                                openList(m/2) = openList(m)
+                                                openList(m) = temp
+                                                m = m/2
+                                            Else
+                                                Exit Do
+                                            End If
+                                        Loop 
+                                    End If  'If openList(x) = nodeID
+                                Next
+                            End If  'If tempgCost < gCost(nodeID)
+                        End If  'If Sqr((nodeObj.X - parentObj.X)^2 + (nodeObj.Y - parentObj.Y)^2 + (nodeObj.Z - parentObj.Z)^2) <= jLength
+                    End If  'If whichList(nodeID) <> onOpenList
+                End If  'If whichList(nodeID) <> onClosedList
+            Next
+
+        'If open list is empty then there is no path.
+        Else
+            If closestID <> "" Then
+                b = MsgBox("Cannot reach destination.  Plot an incomplete route?" & (Chr(13)) & (Chr(13)) & "This will plot a course to a point that is closest to the " & (Chr(13)) & "destination, however, it may not be optimal.",36)
+                If b = 6 Then
+                    path = TRUE
+                    nodeID = closestID
+                Else
+                    path = FALSE
+                End If
+            Else
+                MsgBox "No route found.",64
+                path = FALSE
+            End If
+            Exit Do
+        End If  'If numberOfOpenListItems > 0
+
+        'If target has been added to open list a path is found
+        If whichList.Item(targetObj.IDString) = onOpenList Then
+            path = TRUE
+            nodeID = targetObj.IDString
+            Exit Do
+        End If
+    Loop While (1)
+
+    'If we found a path then make the route
+    If path Then
+        'Create the route
+        route = CreateRoute()
+        route.Name = rName
+        route.RouteType = rType
+        sector.AddRouteType(rType)
+        route.LineStyle = GetLineStyle(rStyle)
+        route.LineWidth = rWidth
+        route.Red = ((rColour mod 65536) mod 256)/255
+        route.Green = ((rColour mod 65536) \ 256)/255
+        route.Blue = (rColour \ 65536)/255
+
+        Do
+            temp = parent.Item(nodeID)
+            
+            'Create a waypoint for each node
+            nodeObj = sector.FindRootBodyByID(nodeID)
+            wp = CreateWaypoint()
+            wp.Body = nodeObj
+            wp.ID = nodeObj.IDString
+            wp.x = nodeObj.x
+            wp.y = nodeObj.y
+            wp.z = nodeObj.z
+            
+            'Add the waypoint to the route
+            route.AddWaypoint(wp)
+
+            nodeID = temp
+        Loop Until wp.Body.IDString = startObj.IDString
+
+        'Add the Route to the sector
+        sector.AddRoute route
+        route.Modified = true
+
+        MsgBox "Route found in " & route.WaypointCount() - 1 & " jumps.",64
+
+    End If
+    If AppVersionMajor() >= 3 Then
+        FreeObject(search)
+    End If
+    'Select the start and target body
+    tempObj = sector.SelectBodies(Empty, Empty, 0)
+    sector.SelectBody(startObj)
+    sector.SelectBody(targetObj)
+End Sub
+
+Sub FindRouteGUI(origin, destination, rType, rName, rColour, rStyle, rWidth, jLength, jUnit)
+    'Declare Variables
+    Dim i, j                                                                        'as Int
+    Dim temp                                                                        'as String
+    Dim w                                                                               'as DialogWindow
+    Dim grp                                                                         'as GroupBox
+    Dim l1, l2, l3, l4, l5, l6, l7, l8                  'as Label
+    Dim routeTypeCombo, jumpLengthCombo                 'as Combo
+    Dim originTextEdit, destinationTextEdit         'as TextEdit
+    Dim routeNameTextEdit                                               'as TextEdit
+    Dim routeColourSelector                                         'as ColorSelector
+    Dim routeStyleDropList, routeWidthDropList  'as DropList
+    Dim jumpUnitRadio                                                       'as RadioGroup
+
+    'Make the interface
+    w = NewDialogWindow()
+    w.SetPosition 10, 20, 280, 460
+    w.Centered = true
+
+    l1 = w.AddLabel()
+    l1.SetPosition 10, 10, 100, 24
+    l1.Caption = "Origin System UABI:"
+
+    originTextEdit = w.AddTextEdit()
+    originTextEdit.SetPosition 10, 25, 250, 24
+    originTextEdit.Text = origin
+
+    l2 = w.AddLabel()
+    l2.SetPosition 10, 60, 100, 24
+    l2.Caption = "Destination System UABI:"
+
+    destinationTextEdit = w.AddTextEdit()
+    destinationTextEdit.SetPosition 10, 75, 250, 24
+    destinationTextEdit.Text = destination
+
+    l3 = w.AddLabel()
+    l3.SetPosition 10, 110, 100, 24
+    l3.Caption = "Route Type:"
+
+    routeTypeCombo = w.AddCombo()
+    routeTypeCombo.SetPosition 10, 125, 250, 24
+    For i = 1 To sector.RouteCount
+        If sector.GetRoute(i - 1).RouteType <> "" Then
+            routeTypeCombo.AddItem sector.GetRoute(i - 1).RouteType
+        End If
+    Next
+    routeTypeCombo.Text = rType
+
+    l4 = w.AddLabel()
+    l4.SetPosition 10, 160, 100, 24
+    l4.Caption = "Route Name:"
+
+    routeNameTextEdit = w.AddTextEdit()
+    routeNameTextEdit.SetPosition 10, 175, 250, 24
+    routeNameTextEdit.Text = rName
+
+    l5 = w.AddLabel()
+    l5.SetPosition 10, 210, 70, 24
+    l5.Caption = "Line Colour:"
+
+    routeColourSelector = w.AddColorSelector()
+    routeColourSelector.SetPosition 70, 207, 100, 22
+    If IsEmpty(rColour) Then
+        Randomize
+        routeColourSelector.Color = RGB(Int((255-0+1)*Rnd+0),Int((255-0+1)*Rnd+0),Int((255-0+1)*Rnd+0))
+    Else
+        routeColourSelector.Color = rColour
+    End If
+    
+    l6 = w.AddLabel()
+    l6.SetPosition 10, 245, 70, 24
+    l6.Caption = "Line Style:"
+
+    routeStyleDropList = w.AddDropList()
+    routeStyleDropList.SetPosition 70, 243, 190, 24
+    routeStyleDropList.AddItem "Solid"
+    routeStyleDropList.AddItem "---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ----"
+    routeStyleDropList.AddItem "- - - - - - - - - - - - - - - - - - - - - - - - - - - - - -"
+    routeStyleDropList.AddItem "--- --- --- --- --- --- --- --- --- --- --- --- --- --- ---"
+    routeStyleDropList.AddItem "--- - - --- - - --- - - --- - - --- - - --- - - --- - - ---"
+    routeStyleDropList.Text = rStyle
+
+    l7 = w.AddLabel()
+    l7.SetPosition 10, 280, 70, 24
+    l7.Caption = "Line Width:"
+
+    routeWidthDropList = w.AddDropList()
+    routeWidthDropList.SetPosition 70, 277, 190, 24
+    For i = 1 To 10
+        routeWidthDropList.AddItem i
+    Next
+    routeWidthDropList.Text = rWidth
+
+    l8 = w.AddLabel()
+    l8.SetPosition 10, 315, 70, 24
+    l8.Caption = "Max Jump:"
+
+    jumpLengthCombo = w.AddCombo()
+    jumpLengthCombo.SetPosition 70, 312, 190, 24
+    For i = 1 To 10
+        jumpLengthCombo.AddItem i
+    Next
+    jumpLengthCombo.Text = jLength
+
+    jumpUnitRadio = w.AddRadioGroup()
+    jumpUnitRadio.SetPosition 70, 340, 190, 40
+    jumpUnitRadio.Columns = 2
+    jumpUnitRadio.AddItem "Light Years"
+    jumpUnitRadio.AddItem "Parsecs"
+    jumpUnitRadio.Text = jUnit
+
+    'Display the display
+    If w.ShowModal Then
+
+        'Validate the origin
+        If Not IsObject(sector.FindRootBodyByID(originTextEdit.Text)) Then
+            MsgBox "Cannot find origin system.",16
+            FindRouteGUI originTextEdit.Text, destinationTextEdit.Text, routeTypeCombo.Text, routeNameTextEdit.Text, routeColourSelector.Color, routeStyleDropList.Text, routeWidthDropList.Text, jumpLengthCombo.Text, jumpUnitRadio.Text
+            Exit Sub
+        End If
+
+        'Validate the destination
+        If Not IsObject(sector.FindRootBodyByID(destinationTextEdit.Text)) Then
+            MsgBox "Cannot find destination system.",16
+            FindRouteGUI originTextEdit.Text, destinationTextEdit.Text, routeTypeCombo.Text, routeNameTextEdit.Text, routeColourSelector.Color, routeStyleDropList.Text, routeWidthDropList.Text, jumpLengthCombo.Text, jumpUnitRadio.Text
+            Exit Sub
+        End If
+
+        'Validate the jump length
+        If Not IsNumeric(jumpLengthCombo.Text) Then
+            MsgBox "Max Jump must be a number.",16
+            FindRouteGUI originTextEdit.Text, destinationTextEdit.Text, routeTypeCombo.Text, routeNameTextEdit.Text, routeColourSelector.Color, routeStyleDropList.Text, routeWidthDropList.Text, jumpLengthCombo.Text, jumpUnitRadio.Text
+            Exit Sub
+        End If
+
+        'Convert the jump length based on the selected unit
+        Select Case jumpUnitRadio.Text
+            Case "Light Years"
+                i = jumpLengthCombo.Text
+            Case "Parsecs"
+                i = jumpLengthCombo.Text * 3.26163626
+        End Select
+        jumpLengthCombo.Text = i
+
+        FindRoute originTextEdit.Text, destinationTextEdit.Text, routeTypeCombo.Text, routeNameTextEdit.Text, routeColourSelector.Color, routeStyleDropList.Text, routeWidthDropList.Text, jumpLengthCombo.Text
+    End If
+End Sub
+
+Sub MainWindow()
+    Dim w                                                   'as DialogWindow
+    Dim radio                                           'as RadioGroup
+    Dim origin, destination             'as String
+
+    'Make the interface
+    set w = NewDialogWindow()
+        w.SetPosition 10, 20, 270, 140
+        w.Centered = true
+
+    radio = w.AddRadioGroup()
+        radio.SetPosition 10, 10, 240, 50
+        radio.Columns = 2
+        radio.AddItem "Mark Jump Points"
+        radio.AddItem "Plot Jump Route"
+        radio.Text = "Mark Jump Points"
+    
+    'Display the display
+    If w.ShowModal Then
+        If radio.Text = "Mark Jump Points" Then
+            MarkJumpPointGUI()
+        Else
+            'Get the ID string for for the origin
+            If IsObject(sector.GetSelected(0)) Then
+                origin = sector.GetSelected(0).IDString
+            End If      
+
+            'Get the ID string for for the destination
+            If IsObject(sector.GetSelected(1)) Then
+                destination = sector.GetSelected(1).IDString
+            End If      
+
+            'We will only allow two systems to be selected
+            If IsObject(sector.GetSelected(2)) Then
+                MsgBox "Plese do not have more then two systems selected.",16
+                Exit Sub
+            End If      
+
+            'Call the Route finder gui
+            FindRouteGUI origin, destination, Empty, Empty, Empty, "Solid", 1, 1, "Light Years"
+        End If
+    End If
+End Sub
+
+
+Sub MarkJumpPointGUI()
+    Dim i               'as Int
+    Dim w               'as DialogWindow
+    Dim radio       'as RadioGroup
+    Dim nodeObj 'as Body
+
+    'Make the interface
+    set w = NewDialogWindow()
+        w.SetPosition 10, 20, 280, 230
+        w.Centered = true
+
+    radio = w.AddRadioGroup()
+        radio.SetPosition 10, 10, 250, 150
+        radio.Columns = 1
+        radio.AddItem "Mark all systems as jump points."
+        radio.AddItem "Unmark all systems as jump points."
+        radio.AddItem "Mark all visible systems as jump points."
+        radio.AddItem "Unmark all visible systems as jump points."
+        radio.AddItem "Mark all selected systems as jump points."
+        radio.AddItem "Unmark all selected systems as jump points."
+        radio.Text = "Mark all systems as jump points."
+
+    'Display the display
+    If w.ShowModal Then
+        Select Case radio.Text
+            Case "Mark all systems as jump points."
+                sector.RenderMessageBig = "Marking all systems as jump points..."
+                sector.RenderMessageSmall = "Press 'Esc' to Exit"
+                RefreshScene
+                For i = 1 To sector.SystemCount
+                    'Check for Escape Key
+                    If keyHit <> 27 Then
+                        keyHit = GetKey()
+                    End If
+                    If keyHit = 27 Then
+                        Exit Sub
+                    End If
+                    sector.GetSystem(i - 1).SetField "jumpPoint", 1
+                Next
+
+            Case "Unmark all systems as jump points."
+                sector.RenderMessageBig = "Unmarking all systems as jump points..."
+                sector.RenderMessageSmall = "Press 'Esc' to Exit"
+                RefreshScene
+                For i = 1 To sector.SystemCount
+                    'Check for Escape Key
+                    If keyHit <> 27 Then
+                        keyHit = GetKey()
+                    End If
+                    If keyHit = 27 Then
+                        Exit Sub
+                    End If
+                    sector.GetSystem(i - 1).SetField "jumpPoint", 0
+                Next
+
+            Case "Mark all visible systems as jump points."
+                sector.RenderMessageBig = "Marking all visible systems as jump points..."
+                sector.RenderMessageSmall = "Press 'Esc' to Exit"
+                RefreshScene
+                For i = 1 To sector.SystemCount
+                    'Check for Escape Key
+                    If keyHit <> 27 Then
+                        keyHit = GetKey()
+                    End If
+                    If keyHit = 27 Then
+                        Exit Sub
+                    End If
+                    If sector.GetSystem(i - 1).Visible = TRUE Then
+                        sector.GetSystem(i - 1).SetField "jumpPoint", 1
+                    End If
+                Next
+
+            Case "Unmark all visible systems as jump points."
+                sector.RenderMessageBig = "Unmarking all visible systems as jump points..."
+                sector.RenderMessageSmall = "Press 'Esc' to Exit"
+                RefreshScene
+                For i = 1 To sector.SystemCount
+                    'Check for Escape Key
+                    If keyHit <> 27 Then
+                        keyHit = GetKey()
+                    End If
+                    If keyHit = 27 Then
+                        Exit Sub
+                    End If
+                    If sector.GetSystem(i - 1).Visible = TRUE Then
+                        sector.GetSystem(i - 1).SetField "jumpPoint", 0
+                    End If
+                Next
+
+            Case "Mark all selected systems as jump points."
+                sector.RenderMessageBig = "Marking all selected systems as jump points..."
+                sector.RenderMessageSmall = "Press 'Esc' to Exit"
+                RefreshScene
+                For i = 1 To sector.SystemCount
+                    'Check for Escape Key
+                    If keyHit <> 27 Then
+                        keyHit = GetKey()
+                    End If
+                    If keyHit = 27 Then
+                        Exit Sub
+                    End If
+                    If sector.GetSystem(i - 1).Selected = TRUE Then
+                        sector.GetSystem(i - 1).SetField "jumpPoint", 1
+                    End If
+                Next
+
+            Case "Unmark all selected systems as jump points."
+                sector.RenderMessageBig = "Unmarking all selected systems as jump points..."
+                sector.RenderMessageSmall = "Press 'Esc' to Exit"
+                RefreshScene
+                For i = 1 To sector.SystemCount
+                    'Check for Escape Key
+                    If keyHit <> 27 Then
+                        keyHit = GetKey()
+                    End If
+                    If keyHit = 27 Then
+                        Exit Sub
+                    End If
+                    If sector.GetSystem(i - 1).Selected = TRUE Then
+                        sector.GetSystem(i - 1).SetField "jumpPoint", 0
+                    End If
+                Next
+
+        End Select
+    End If
+End Sub
+
+Function GetLineStyle(lineString)
+    'Convert the text for the route style to an integer
+    Select Case lineString
+        Case "Solid"
+            GetLineStyle = 0
+        Case "---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ----"
+            GetLineStyle = 1
+        Case "- - - - - - - - - - - - - - - - - - - - - - - - - - - - - -"
+            GetLineStyle = 2
+        Case "--- --- --- --- --- --- --- --- --- --- --- --- --- --- ---"
+            GetLineStyle = 3
+        Case "--- - - --- - - --- - - --- - - --- - - --- - - --- - - ---"
+            GetLineStyle = 4
+    End Select
+End Function

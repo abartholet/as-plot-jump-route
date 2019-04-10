@@ -1,0 +1,27 @@
+#popmenu	Toggle Jump Point
+#author		Alan Bartholet
+#desc			Toggles whether a root body is a jump point or not.
+'Version 1.4
+
+'No undeclared variables
+Option Explicit 
+
+'Declare other variables
+Dim mb		'as Int
+Dim body 	'as body
+
+If not IsNull(EditingBody) Then 
+	'Get the editing body
+	body = EditingBody()
+
+	'Display the message box
+	mb = MsgBox("Is " & body.GetRootBody.Name & " a jump point?",36, "Toggle Jump Point")
+
+	'Mark it if yes
+	If mb = 6 Then
+		body.GetRootBody.SetField "jumpPoint", 1
+	'Unmark it if no
+	Else
+		body.GetRootBody.SetField "jumpPoint", 0
+	End If
+End If
